@@ -61,16 +61,53 @@ class CPU:
 
         self.defineRegisters()
 
-    def step(self):
-        # fetch
-        c=OPCODE(self.program[self.PC])
+    def splitCode(self,cStr):
+        m=""
 
+        # first lets get the opcode, which maybe 1 or 2 digits
+        if len(cStr)==1:
+            c=int(cStr[-1])
+        elif len(cStr)>=2:
+            c=int(cStr[-2:])
+
+        # for any other digits, these are mode controls, so we simply
+        # return those
+        if len(cStr)>=3:
+            # the rest of string is mode controls
+            m=cStr[:-2]
+            # reverse the string
+            m=m[::-1]
+
+        # we should always have 3 mode control bits, so if the string is
+        # less than 3 chars, lets pad out the end with 0s
+        m=m.ljust(3, "0")
+        # convert to ints
+        m=[int(x) for x in m]
+        return c,m
+
+
+    def step(self):
+
+        c,m=self.splitCode(str(self.program[self.PC]))
+
+        c=OPCODE(self.program[self.PC])
+        if m[0]==0:
+            lhs=self.program[self.PC+1]
+        else:
+            lhs=self.PC+1
+
+        if m[1]==0:
+            rhs=self.program[self.PC+2]
+        else:
+            rhs=self.PC+2
+ 
+        if m[2]==0:
+            dest=self.program[self.PC+3]
+        else:
+            dest=self.PC+3    
+ 
         if c==OPCODE.ADD:
             print("ADD")
-            lhs=self.program[self.PC+1]
-            rhs=self.program[self.PC+2]
-            dest=self.program[self.PC+3]
-
             self.program[dest]=self.program[lhs]+self.program[rhs]
 
             # move on the PC
@@ -78,10 +115,6 @@ class CPU:
 
         elif c==OPCODE.MUL:
             print("MUL")
-            lhs=self.program[self.PC+1]
-            rhs=self.program[self.PC+2]
-            dest=self.program[self.PC+3]
-
             self.program[dest]=self.program[lhs]*self.program[rhs]
 
             # move on the PC
