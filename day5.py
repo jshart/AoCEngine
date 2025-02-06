@@ -50,17 +50,32 @@ import networkx as nx
 class OPCODE(Enum):
     ADD = 1
     MUL = 2
+    INPUT = 3
+    OUTPUT = 4
     HALT = 99
 
 class CPU:
     def __init__(self):
         #self.registers=dict()
         self.PC=0 # program counter
+        self.inputCounter=0
         self.rawProgram=[]
         self.program=[]
+        self.input=None
 
         self.defineRegisters()
 
+    def loadInput(self,inputs):
+        self.input=inputs
+
+    def getNextInput(self):
+        if self.inputCounter<len(self.input):
+            i=self.input[self.inputCounter]
+            self.inputCounter+=1
+            return i
+        else:
+            return None
+        
     def splitCode(self,cStr):
         m=""
 
@@ -88,24 +103,34 @@ class CPU:
 
     def step(self):
 
+        lhs=0
+        rhs=0
+        dest=0
         c,m=self.splitCode(str(self.program[self.PC]))
+        print("OP:",c," Modes:",m)
 
-        c=OPCODE(self.program[self.PC])
-        if m[0]==0:
-            lhs=self.program[self.PC+1]
-        else:
-            lhs=self.PC+1
+        c=OPCODE(c)
+        # do we have a param left in the program?
+        if self.PC+1<len(self.program):
+            if m[0]==0:
+                lhs=self.program[self.PC+1]
+            else:
+                lhs=self.PC+1
 
-        if m[1]==0:
-            rhs=self.program[self.PC+2]
-        else:
-            rhs=self.PC+2
+        if self.PC+2<len(self.program):
+            if m[1]==0:
+                rhs=self.program[self.PC+2]
+            else:
+                rhs=self.PC+2
  
-        if m[2]==0:
-            dest=self.program[self.PC+3]
-        else:
-            dest=self.PC+3    
+        if self.PC+3<len(self.program):
+            if m[2]==0:
+                dest=self.program[self.PC+3]
+            else:
+                dest=self.PC+3    
  
+        print("\-> LHS:", lhs, "RHS:", rhs, "DEST:", dest)
+
         if c==OPCODE.ADD:
             print("ADD")
             self.program[dest]=self.program[lhs]+self.program[rhs]
@@ -119,6 +144,23 @@ class CPU:
 
             # move on the PC
             self.PC+=4
+        
+        elif c==OPCODE.INPUT:
+            print("INPUT")
+            # get input from the user
+            i=self.getNextInput()
+            self.program[lhs]=i
+
+            # move on the PC
+            self.PC+=2
+
+        elif c==OPCODE.OUTPUT:
+            print("OUTPUT")
+            # output to the user
+            print("OUTPUT:", self.program[lhs])
+
+            # move on the PC
+            self.PC+=2
 
         elif c==OPCODE.HALT:
             print("HALT")
@@ -204,7 +246,7 @@ class SystemConfig:
         self.frameRate=5 # currently unused
 
         # data load parameters
-        self.screenCaption="Day2_v2"
+        self.screenCaption="Day5_v2"
         self.dataPath=self.screenCaption+"/data"
 
         # system control flags - configure key behaviours
@@ -1462,8 +1504,9 @@ configMatrix.registerMouseClickHandler(configMatrix.defaultMouseClickHandler)
 # **** Start of puzzle specific setup code
 cpu = CPU()
 cpu.loadCSVNumbers(file1)
-cpu.program[1]=52
-cpu.program[2]=8
+cpu.loadInput([1])
+# cpu.program[1]=52
+# cpu.program[2]=8
 cpu.print()
 
 
@@ -1550,4 +1593,4 @@ pygame.quit()
 # box unicode chars; https://en.wikipedia.org/wiki/Box_Drawing
 
 
-#https://adventofcode.com/2018/day/11#part2
+# need to implement Part 2 - the jump and compare functions
