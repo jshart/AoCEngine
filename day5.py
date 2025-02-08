@@ -191,7 +191,7 @@ class CPU:
             self.PC+=4
 
         elif c==OPCODE.EQ:
-            print("GT")
+            print("EQ")
             if self.program[lhs]==self.program[rhs]:
                 self.program[dest]=1
             else:
