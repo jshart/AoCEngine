@@ -52,6 +52,10 @@ class OPCODE(Enum):
     MUL = 2
     INPUT = 3
     OUTPUT = 4
+    JIT = 5
+    JIF = 6
+    LT = 7
+    EQ = 8
     HALT = 99
 
 class CPU:
@@ -161,6 +165,41 @@ class CPU:
 
             # move on the PC
             self.PC+=2
+
+        elif c==OPCODE.JIF:
+            print("JIF")
+            if self.program[lhs]==0:
+                self.PC=self.program[rhs]
+            else:
+                self.PC+=3
+                
+        elif c==OPCODE.JIT:
+            print("JIT")
+            if self.program[lhs]!=0:
+                self.PC=self.program[rhs]
+            else:
+                self.PC+=3
+
+        elif c==OPCODE.LT:
+            print("LT")
+            if self.program[lhs]<self.program[rhs]:
+                self.program[dest]=1
+            else:
+                self.program[dest]=0
+
+            # move on the PC
+            self.PC+=4
+
+        elif c==OPCODE.EQ:
+            print("GT")
+            if self.program[lhs]==self.program[rhs]:
+                self.program[dest]=1
+            else:
+                self.program[dest]=0
+
+            # move on the PC
+            self.PC+=4
+        
 
         elif c==OPCODE.HALT:
             print("HALT")
@@ -1504,7 +1543,7 @@ configMatrix.registerMouseClickHandler(configMatrix.defaultMouseClickHandler)
 # **** Start of puzzle specific setup code
 cpu = CPU()
 cpu.loadCSVNumbers(file1)
-cpu.loadInput([1])
+cpu.loadInput([5])
 # cpu.program[1]=52
 # cpu.program[2]=8
 cpu.print()
