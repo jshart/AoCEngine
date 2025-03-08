@@ -1,6 +1,8 @@
 from enum import Enum, auto
 
 from compass import *
+from searchSpace import *
+
 
 class Robot:
     def __init__(self, x, y, w, h):
