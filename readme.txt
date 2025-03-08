@@ -35,6 +35,32 @@
 #       └────────────────┘        └─────────────────┘                         
 # https://asciiflow.com/#/local/AoC_Class_Model          
 
+
+# ┌───────────────────┐                                        
+# │                   ┼──────write──────────┐                  
+# │ Main() Code/Loop  │            ┌────────▼────────┐         
+# │                   │            │                 │         
+# │                   ◄──────Read──┼ IOBuffer        │         
+# └─────┬─────────────┘       ┌────┼                 ◄────┐    
+#       │                     │    │                 │    │    
+#       │                     │    └─────────────────┘    │    
+#       │                   Input                        Output
+#       │                     │    ┌─────────────────┐    │    
+#       │                     │    │                 │    │    
+#       │                     │    │ CPU             │    │    
+#       │                     └────►                 ┼────┘    
+#       │                          │                 │         
+#       └────Load─Program──────────►───────────┬─────┘         
+#            Single Step per tick              │               
+#                                              │               
+#                                              │               
+#                                           ┌──┴────────────┐  
+#                                           │               │  
+#                                           │ Opcode        │  
+#                                           │               │  
+#                                           └───────────────┘  
+# https://asciiflow.com/#/local/CPU_Class_Diagram
+
 # DayTemplate Python Program
 
 ## Overview
