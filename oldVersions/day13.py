@@ -7,8 +7,6 @@ from collections import defaultdict
 import pygame
 import sys
 import networkx as nx
-import pygame.freetype
-import random
 
 #       ┌─────────────────┐                                                   
 #       │System Config    │                                                   
@@ -47,26 +45,339 @@ import random
 #       └────────────────┘        └─────────────────┘                         
 # https://asciiflow.com/#/local/AoC_Class_Model              
 
+
+class Robot:
+    def __init__(self, x, y, w, h):
+        self.sprite=Sprite(x,y,w,h)
+        self.sprite.setEmoji("🤖")
+        self.input=None
+        self.output=None
+        self.locationHistory=set()
+
+    # record the current location in the history
+    # we get the location from the sprite
+    def recordLocation(self):
+        self.locationHistory.add(self.sprite.getLocation())
+
+    def attachInputBuffer(self, buffer):
+        self.input=buffer
+    
+    def attachOutputBuffer(self, buffer):
+        self.output=buffer
+
+# create an OPCODE enum
+class OPCODE(Enum):
+    ADD = 1
+    MUL = 2
+    INPUT = 3
+    OUTPUT = 4
+    JIT = 5
+    JIF = 6
+    LT = 7
+    EQ = 8
+    RBASE = 9
+    HALT = 99
+
+class ADDRESS_MODE(Enum):
+    POSITION = 0
+    IMMEDIATE = 1
+    RELATIVE = 2
+
+class IOBuffer:
+    def __init__(self):
+        self.buffer=[]
+
+    def write(self, value):
+        self.buffer.append(value)
+
+    def read(self):
+        if len(self.buffer)>0:
+            return self.buffer.pop(0)
+        else:
+            return None
+
+    def print(self):
+        print("IO Buffer:")
+        for o in self.buffer:
+            print("\_[",o,"]")
+
+class CPU:
+    def __init__(self):
+        #self.registers=dict()
+        self.PC=0 # program counter
+        self.rBase=0
+        self.rawProgram=[]
+        self.program=[]
+        self.outputBuffer=None
+        self.inputBuffer=None
+
+        self.defineRegisters()
+
+    def attachInputBuffer(self, buffer):
+        self.inputBuffer=buffer
+    
+    def attachOutputBuffer(self, buffer):
+        self.outputBuffer=buffer
+
+    def pollForInput(self):
+        if self.inputBuffer==None:
+            return None
+        return self.inputBuffer.read()
+
+    def getNextInput(self):
+        if self.inputCounter<len(self.input):
+            i=self.input[self.inputCounter]
+            self.inputCounter+=1
+            return i
+        else:
+            return None
+        
+    def splitCode(self,cStr):
+        m=""
+
+        # first lets get the opcode, which maybe 1 or 2 digits
+        if len(cStr)==1:
+            c=int(cStr[-1])
+        elif len(cStr)>=2:
+            c=int(cStr[-2:])
+
+        # for any other digits, these are mode controls, so we simply
+        # return those
+        if len(cStr)>=3:
+            # the rest of string is mode controls
+            m=cStr[:-2]
+            # reverse the string
+            m=m[::-1]
+
+        # we should always have 3 mode control bits, so if the string is
+        # less than 3 chars, lets pad out the end with 0s
+        m=m.ljust(3, "0")
+        # convert to ints
+        m=[int(x) for x in m]
+        return c,m
+
+
+    def step(self):
+
+        lhs=0
+        rhs=0
+        dest=0
+        c,m=self.splitCode(str(self.program[self.PC]))
+        #print("OP:",c," Modes:",m)
+
+        c=OPCODE(c)
+        # do we have a param left in the program?
+        if self.PC+1<len(self.program):
+            if m[0]==ADDRESS_MODE.POSITION.value:
+                lhs=self.program[self.PC+1]
+            elif m[0]==ADDRESS_MODE.IMMEDIATE.value:
+                lhs=self.PC+1
+            elif m[0]==ADDRESS_MODE.RELATIVE.value:
+                lhs=self.program[self.PC+1]+self.rBase
+
+        if self.PC+2<len(self.program):
+            if m[1]==ADDRESS_MODE.POSITION.value:
+                rhs=self.program[self.PC+2]
+            elif m[1]==ADDRESS_MODE.IMMEDIATE.value:
+                rhs=self.PC+2
+            elif m[1]==ADDRESS_MODE.RELATIVE.value:
+                rhs=self.program[self.PC+2]+self.rBase
+ 
+        if self.PC+3<len(self.program):
+            if m[2]==ADDRESS_MODE.POSITION.value:
+                dest=self.program[self.PC+3]
+            elif m[2]==ADDRESS_MODE.IMMEDIATE.value:
+                dest=self.PC+3    
+            elif m[2]==ADDRESS_MODE.RELATIVE.value:
+                dest=self.program[self.PC+3]+self.rBase
+ 
+        #print("---ADDRESSES LHS:", lhs, "RHS:", rhs, "DEST:", dest, end=" --OPCODE=")
+
+        match c:
+            case OPCODE.ADD:
+                #print("[ADD]")
+                self.program[dest]=self.program[lhs]+self.program[rhs]
+
+                # move on the PC
+                self.PC+=4
+
+            case OPCODE.MUL:
+                #print("[MUL]")
+                self.program[dest]=self.program[lhs]*self.program[rhs]
+
+                # move on the PC
+                self.PC+=4
+        
+            case OPCODE.INPUT:
+                #print("[INPUT]")
+                # get input from the user
+                i=self.pollForInput()
+
+                # if this found something, update
+                # the LHS and mpve the PC. If it
+                # found None then we "no-op" as
+                # that leaves the PC pointing at this
+                # and means we'll poll again (effectively
+                # pause here until we get an input)
+                if i!=None:
+                    self.program[lhs]=i
+
+                    # move on the PC
+                    self.PC+=2
+
+            case OPCODE.OUTPUT:
+                #print("[OUTPUT]")
+                # output to the user
+                #print("--Value:", self.program[lhs])
+                self.outputBuffer.write(self.program[lhs])
+
+                # move on the PC
+                self.PC+=2
+
+            case OPCODE.JIF:
+                #print("[JIF]")
+                if self.program[lhs]==0:
+                    self.PC=self.program[rhs]
+                else:
+                    self.PC+=3
+                
+            case OPCODE.JIT:
+                #print("[JIT]")
+                if self.program[lhs]!=0:
+                    self.PC=self.program[rhs]
+                else:
+                    self.PC+=3
+
+            case OPCODE.LT:
+                #print("[LT]")
+                if self.program[lhs]<self.program[rhs]:
+                    self.program[dest]=1
+                else:
+                    self.program[dest]=0
+
+                # move on the PC
+                self.PC+=4
+
+            case OPCODE.EQ:
+                #print("[EQ]")
+                if self.program[lhs]==self.program[rhs]:
+                    self.program[dest]=1
+                else:
+                    self.program[dest]=0
+
+                # move on the PC
+                self.PC+=4
+        
+            case OPCODE.RBASE:
+                #print("[RBASE]")
+                self.rBase+=self.program[lhs]
+
+                # move on the PC
+                self.PC+=2
+
+            case OPCODE.HALT:
+                #print("[HALT]")
+                # move on the PC
+                self.PC+=1
+                return False
+
+        # if we've completed the program return False
+        # to indicate there are no more steps
+        if self.PC >= len(self.program):
+            return False
+        
+        # Otherwise if we hit here there are more
+        # steps - so return True to indicate there
+        # is still more to do
+        return True
+  
+    def defineRegisters(self):
+        # example code to setup registers based on upper case letters
+        # for i in range(0, 26):
+        #     self.registers[chr(ord("A")+i)]=0
+
+        # example code to setup registers named 0 thru 3
+        # for i in range(0, 4):
+        #     self.registers[str(i)]=0
+
+        # example code to setup registers 'a' thru 'd'
+        # for i in range(ord("a"), ord("d")+1):
+        #     self.registers[chr(i)]=0
+        pass
+
+    def setRegister(self,key,value):
+        self.registers[key]=value
+
+    # load a comma seperated value string of numbers, splitting by comma
+    def loadCSVNumbers(self, filehandle, minLen):
+        lines=filehandle.readlines()
+        for l in lines:
+            l=l.strip()
+            for n in l.split(","):
+                self.program.append(int(n))
+                print(len(self.program),":[", n, "]")
+
+        # Pad the end of the program with empty memory
+        if len(self.program)<minLen:
+            for i in range(len(self.program), minLen):
+                self.program.append(0)
+
+    def loadProgram(self, filehandle):
+        lines=filehandle.readlines()
+        for l in lines:
+            self.rawProgram.append(l.strip())
+
+        for l in self.rawProgram:
+            self.program.append(cpuCommand(l))
+
+    def print(self):
+        self.printCPUState()
+        #self.printRegisters()
+        self.printProgram()
+
+    def printCPUState(self):
+        print("PC:", self.PC, "=>", self.program[self.PC])
+
+    def printRegisters(self):
+        for k in self.registers:
+            print(k, "=>", self.registers[k], end="  ")
+        print("")
+
+    def printProgram(self):
+        for c in self.program:
+            print("C:",str(c))
+
+class cpuCommand:
+    def __init__(self, rawStr):
+        self.rawStr=rawStr
+        self.opCode=rawStr.split(" ")[0]
+        self.operands=rawStr.split(" ")[1:]
+
+    def print(self):
+        print(self.opCode,"=>",self.operands)
+
+
 class SystemConfig:
     def __init__(self):
         # Screen (i.e. pygame) level parameters
-        self.sw=800 # screen width
-        self.sh=600 # screen height
+        self.sw=1000 # screen width
+        self.sh=1000 # screen height
         self.frameRate=5 # currently unused
 
         # data load parameters
-        self.screenCaption="Day18"
+        self.screenCaption="Day13_v2"
         self.dataPath=self.screenCaption+"/data"
 
         # system control flags - configure key behaviours
-        self.drawEmoji=False
-        self.drawRects=True
-        self.drawCellValues=True
-        self.drawGrid=True
+        self.drawEmoji=True
+        self.drawRects=False
+        self.fillRects=False
+        self.drawCellValues=False
+        self.drawGrid=False
         self.testMode=False
 
-        # list of all matrices we might want to display (i.e. a matrix = a thing to display)
-        self.matrices=[] # keeping this simple for now - may need to give matrices names eventually and replace this with a dictionary
+        # dict of all matrices we might want to display (i.e. a matrix = a thing to display)
+        self.matrices={}
         self.currentMatrix=None
 
         self.dummy="not set"
@@ -92,8 +403,8 @@ class SystemConfig:
         self.addMatrix(matrix)
         return matrix
     
-    def addMatrix(self,matrix, makeCurrent=True):
-        self.matrices.append(matrix)
+    def addMatrix(self, name, matrix, makeCurrent=True):
+        self.matrices[name]=matrix
         if makeCurrent==True:
             self.currentMatrix=matrix
 
@@ -336,13 +647,13 @@ class SpriteManager:
 
 # useful sprite emojis, 🚶‍♂️🚂
 class Sprite:
-    def __init__(self, x, y, w, h, d, c):
+    def __init__(self, x, y, w, h, d=CompassDirection.NORTH, c=(255,255,255)):
         self.x=x
         self.y=y
         self.w=w
         self.h=h
         self.direction=d
-        self.c=c
+        self.colour=c
         self.locationHistory=Path(x, y)
         self.solution=""
         self.emoji=""
@@ -360,6 +671,9 @@ class Sprite:
         self.y=destCell.y
         self.locationHistory.moveTo((self.x, self.y), destCell.value)
 
+    def getLocation(self):
+        return (self.x, self.y)
+    
     # TODO - implement some basic collision detection and behaviours?
     def checkNextValidMoves(self, m):
 
@@ -390,6 +704,23 @@ class Sprite:
 
         # now we know where our next step is, so lets move there
         self.updateLocation(m.getCell(self.x+deltaX, self.y+deltaY))
+
+    def setCellAtCurrentLocation(self,m,v):
+        m.setCellValue(self.x, self.y, v)
+
+    def getCellValueAtCurrentLocation(self,m):
+        return m.getCell(self.x, self.y).value
+    
+    def turnLeft(self):
+        self.direction=self.direction.turnLeft()
+    
+    def turnRight(self):
+        self.direction=self.direction.turnRight()
+
+    def moveForward(self):
+        deltaX,deltaY=self.direction.getMovementDelta()
+        self.x+=deltaX
+        self.y+=deltaY
 
     def print(self):
         print("Sprite at:", self.x, self.y, "with direction:", self.direction, "Completed:", self.locationHistory.completed)
@@ -648,9 +979,12 @@ class Cell:
     def __init__(self, x, y, value):
         self.x = x
         self.y = y
-        self.color = (0, 0, 0)
+        self.colour = (0, 0, 0)
         self.value=value
         self.payload=None
+
+    def setColour(self,c):
+        self.colour=c
 
     def __str__(self):
         return f"Cell: {self.x}, {self.y}, {self.value}"
@@ -680,7 +1014,7 @@ class Cell:
     # Creates a duplicate of this cell and returns the copy
     def copy(self):
         c=Cell(self.x, self.y, self.value)
-        c.color=self.color
+        c.colour=self.colour
         c.payload=self.payload
         return c
     
@@ -690,7 +1024,7 @@ class Cell:
         self.x=c.x
         self.y=c.y
         self.value=c.value
-        self.color=c.color
+        self.colour=c.color
         self.payload=c.payload
     
 
@@ -705,6 +1039,7 @@ class Matrix:
         self.cells = [[Cell(x, y, defaultValue) for x in range(width)] for y in range(height)]
         self.cellSizeW = csw
         self.cellSizeH = csh
+        self.spriteManager = SpriteManager()
 
         self.mouseClickHandler=None
 
@@ -743,6 +1078,11 @@ class Matrix:
     # return a specific row
     def getRow(self,r):
         return(self.cells[r])
+    
+    def setAllTo(self,value):
+        for y in range(0, self.height):
+            for x in range(0, self.width):
+                self.setCellValue(x, y, value)
 
     # TODO - think about if this is "pure" by being at this level - should I really
     # allow a matrix level function to set a cell velue, or should I push this
@@ -756,16 +1096,23 @@ class Matrix:
             return
         self.cells[y][x].value = value
 
-        if type(value)==int:
+        if isinstance(value,int):
+            value=int(value)
             if self.numberFound==False:
                 self.numberFound=True
                 self.minCellValue=value
                 self.maxCellValue=value
+                print("lerp: first number found is:",value)
             else:
                 if value < self.minCellValue:
                     self.minCellValue=value
                 if value > self.maxCellValue:
                     self.maxCellValue=value
+
+    def getCellValue(self, x, y):
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return None
+        return self.cells[y][x].value
 
     def randomiseMatrix(self,min,max):
         for y in range(0, self.height):
@@ -1035,8 +1382,8 @@ class Display:
         self.grass="🟩"
         self.sick="🤢"
 
-    def switchMatrix(self, sc, newMatrix):
-        sc.currentMatrix=newMatrix
+    def switchMatrix(self, sc, name):
+        sc.currentMatrix=sc.matrices[name]
         self.adjustDrawWindow(self.sc, 0, 0, 0)
 
     def isInDrawWindow(self,x,y):
@@ -1096,11 +1443,12 @@ class Display:
         for sprite in sprites:
             sx1=(sprite.x-self.matrixDrawWindow[0])*sc.currentMatrix.cellSizeW
             sy1=(sprite.y-self.matrixDrawWindow[1])*sc.currentMatrix.cellSizeH
-
+            if sc.fillRects:
+                pygame.draw.rect(screen, sprite.colour, pygame.Rect(sprite.x*sc.currentMatrix.cellSizeW, sprite.y*sc.currentMatrix.cellSizeH, sprite.w, sprite.h))
             if sc.drawRects:
-                pygame.draw.rect(screen, sprite.c, pygame.Rect(sprite.x*sc.currentMatrix.cellSizeW, sprite.y*sc.currentMatrix.cellSizeH, sprite.w, sprite.h))
+                pygame.draw.rect(screen, sprite.colour, pygame.Rect(sprite.x*sc.currentMatrix.cellSizeW, sprite.y*sc.currentMatrix.cellSizeH, sprite.w, sprite.h),1)
             if sc.drawEmoji:
-                screen.blit(font.render(sprite.emoji, True, sprite.c), (sx1, sy1))
+                screen.blit(font.render(sprite.emoji, True, sprite.colour), (sx1, sy1))
 
     def drawPathToScreen(self, sc, path,lColor=(255,0,0)):
         for p in range(0, len(path)-1):
@@ -1126,41 +1474,90 @@ class Display:
                     # draw a border around the cell  - e.g. for highlighting
                     #pygame.draw.rect(self.screen, cell.color, (screenX, screenY, sf, sf))
 
-                    # Check for "special" values that we use to "draw" map/matrix elements
-                    if cell.value=="#":
-                        if sc.drawRects:
-                            pygame.draw.rect(self.screen, (255,255,0), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH))
-                            #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
-                        if sc.drawEmoji:
-                            #text_surface = font.render(self.brickWall, True, (255, 255, 0))
-                            text_surface = font.render(self.sick, True, (255, 255, 0))
-                            self.screen.blit(text_surface, (screenX, screenY))
-                    elif cell.value=="o":
-                        if sc.drawRects:
-                            pygame.draw.rect(self.screen, (125, 125, 125), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH))
-                            #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
-                    elif cell.value=="@":
-                        if sc.drawRects:
-                            pygame.draw.rect(self.screen, (125, 0, 0), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH))
-                            #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
-                        if sc.drawEmoji:
-                            text_surface = font.render(self.tree, True, (255, 255, 0))
-                            self.screen.blit(text_surface, (screenX, screenY))
-                    elif cell.value==".":
-                        # if sc.drawEmoji:
-                        #     text_surface = font.render(self.grass, True, (0, 255, 0))
-                        #     self.screen.blit(text_surface, (screenX, screenY))
-                        pass
+                    if sc.fillRects:
+                        if isinstance(cell.value, int):
+                            c = int(lerp(cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue, 0, 255))
+                            # if cell.value!=0:
+                            #     print("lerp:",c,cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue)
+                            pygame.draw.rect(self.screen, (c,c,c), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH))
 
-                    # in the event that this cell contains an int value - we can optionally map that to a colour to fill the cell
-                    elif type(cell.value)==int or type(cell.value)==float:
-                        if sc.drawRects:
-                            c = int(lerp(cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue, 0, 255))
-                            pygame.draw.rect(self.screen, (c, c, c), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH))
-                        if sc.drawEmoji:
-                            c = int(lerp(cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue, 0, 255))
-                            text_surface = font.render(self.tree, True, (c, c, c))
-                            self.screen.blit(text_surface, (screenX, screenY))
+                    match cell.value:
+                        case 0:
+                            pass
+                        case 1:
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.brickWall, True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case 2:
+                            if sc.drawEmoji:
+                                text_surface = font.render("🟨", True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case 3:
+                            if sc.drawEmoji:
+                                text_surface = font.render("🏓", True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case 4:
+                            if sc.drawEmoji:
+                                text_surface = font.render("⚽", True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case " ":
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.grass, True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case "#":
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.brickWall, True, (255, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case "@":
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.tree, True, (255, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case ".":
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.plant, True, (0, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+                        case "o":
+                            if sc.drawEmoji:
+                                text_surface = font.render(self.wood, True, (255, 255, 0))
+                                self.screen.blit(text_surface, (screenX, screenY))
+
+                        case _:
+
+                            # # Check for "special" values that we use to "draw" map/matrix elements
+                            # if cell.value=="#":
+                            #     if sc.drawRects:
+                            #         pygame.draw.rect(self.screen, (255,255,0), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH),1)
+                            #         #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
+                            #     if sc.drawEmoji:
+                            #         #text_surface = font.render(self.brickWall, True, (255, 255, 0))
+                            #         text_surface = font.render(self.sick, True, (255, 255, 0))
+                            #         self.screen.blit(text_surface, (screenX, screenY))
+                            # elif cell.value=="o":
+                            #     if sc.drawRects:
+                            #         pygame.draw.rect(self.screen, (125, 125, 125), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH),1)
+                            #         #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
+                            # elif cell.value=="@":
+                            #     if sc.drawRects:
+                            #         pygame.draw.rect(self.screen, (125, 0, 0), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH),1)
+                            #         #pygame.draw.rect(self.screen, (255, 255, 255), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH), 1)
+                            #     if sc.drawEmoji:
+                            #         text_surface = font.render(self.tree, True, (255, 255, 0))
+                            #         self.screen.blit(text_surface, (screenX, screenY))
+                            # elif cell.value==".":
+                            #     # if sc.drawEmoji:
+                            #     #     text_surface = font.render(self.grass, True, (0, 255, 0))
+                            #     #     self.screen.blit(text_surface, (screenX, screenY))
+                            #     pass
+
+                            # in the event that this cell contains an int value - we can optionally map that to a colour to fill the cell
+                            if type(cell.value)==int or type(cell.value)==float:
+                                if sc.drawRects:
+                                    c = int(lerp(cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue, 0, 255))
+                                    pygame.draw.rect(self.screen, (c, c, c), (screenX, screenY, sc.currentMatrix.cellSizeW, sc.currentMatrix.cellSizeH),1)
+                                # if sc.drawEmoji:
+                                #     c = int(lerp(cell.value, sc.currentMatrix.minCellValue, sc.currentMatrix.maxCellValue, 0, 255))
+                                #     text_surface = font.render(self.tree, True, (c, c, c))
+                                #     self.screen.blit(text_surface, (screenX, screenY))
 
                     # This case is for where we just want to display the value of the cell contents
                     if sc.drawCellValues:
@@ -1173,7 +1570,7 @@ class Display:
                         if cell.payload is not None:
                             p = cell.payload if type(cell.payload) == str else str(cell.payload)
                             v=v+":"+p
-                        text_surface = font.render(v, True, (255, 255, 255))
+                        text_surface = font.render(v, True, (0, 0, 255))
                         self.screen.blit(text_surface, (screenX, screenY))
 
     def drawGridOnMatrix(self, sc):
@@ -1187,7 +1584,7 @@ class Display:
                 # Switch to the corresponding matrix
                 matrix_index = event.key - pygame.K_0
                 if matrix_index<len(sc.matrices):
-                    self.switchMatrix(sc, sc.matrices[matrix_index])
+                    self.switchMatrix(sc, list(sc.matrices.keys())[matrix_index])
             elif event.key == pygame.K_LEFT:
                 self.adjustDrawWindow(sc, -1, 0, 0)
             elif event.key == pygame.K_RIGHT:
@@ -1236,7 +1633,7 @@ class Display:
             if sc.currentMatrix.mouseClickHandler is not None:
                 sc.currentMatrix.mouseClickHandler(matrix_x, matrix_y)
 
-    def updateDisplay(self,sc, bps=None, cps=None, runs=0, sprites=None):
+    def updateDisplay(self, sc, bps=None, cps=None, runs=0, sprites=None):
         # Update the display
         self.screen.fill((0, 0, 0))  # Fill the screen with black (or any other color)
 
@@ -1287,71 +1684,53 @@ def decimalToAlphabeticLabel(n):
 
 def lerp(value, in_min, in_max, out_min, out_max):
     # Calculate the mapped value
-    return (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+    inRange=in_max-in_min
+    outRange=out_max-out_min
+    if inRange==0:
+        return 0
+    return (value - in_min) * outRange / inRange + out_min
 
-
-# custom code for day 11 2018
-def doCalcs(x,y,serialNumber):
-    rackID=x+10
-    powerLevel=rackID*y
-    powerLevel+=serialNumber
-    powerLevel*=rackID
-    powerLevel=int(str(powerLevel)[-3])-5 if powerLevel>100 else -5
-    return powerLevel
 
 sc=SystemConfig()
 
 part2=False
 if sc.testMode:
-    # file1 = open(sc.dataPath+'/input_test2.txt', 'r')
-    cellSizeW=2
-    cellSizeH=2
-    sNumber=73
-    sNumber=42
+    file1 = open(sc.dataPath+'/input_test.txt', 'r')
+    cellSizeW=20
+    cellSizeH=20
+    initMatrixX=10
+    initMatrixY=10
+    robotCommands=[1,0,0,0,1,0,1,0,0,1,1,0,1,0]
 else:
-    # file1 = open(sc.dataPath+'/input.txt', 'r')
-    cellSizeW=2
-    cellSizeH=2
-    sNumber=5177
-
-# matrix=sc.simpleMatrixLoad(file1)
-matrix=Matrix(301,301,0,csw=cellSizeW,csh=cellSizeH)
-sc.addMatrix(matrix)
-
-randomMatrix=Matrix(30,30,csw=20,csh=10)
-randomMatrix.randomiseMatrix(-10,10)
-sc.addMatrix(randomMatrix,False)
+    file1 = open(sc.dataPath+'/input.txt', 'r')
+    cellSizeW=20
+    cellSizeH=20
+    initMatrixX=50
+    initMatrixY=50
 
 configMatrix=sc.createConfigMatrix()
-sc.addMatrix(configMatrix, False)
+sc.addMatrix("config",configMatrix, True)
 configMatrix.registerMouseClickHandler(configMatrix.defaultMouseClickHandler)
 
-if part2:
-    maxRuns=600
-else:
-    maxRuns=10
+    
+
+# **** Start of puzzle specific setup code
+cpu = CPU()
+CPUToVDU=IOBuffer()
+InputToCPU=IOBuffer()
+cpu.loadCSVNumbers(file1,10000)
+cpu.attachOutputBuffer(CPUToVDU)
+cpu.attachInputBuffer(InputToCPU)
+
+cpu.program[0]=2
 
 
-# **** Puzzle specific setup code
-# setup the matrix with the values for the puzzle
-for y in range(1, matrix.height):
-    for x in range(1, matrix.width):
-        matrix.setCellValue(x, y, doCalcs(x, y, sNumber))
 
-# we now need to use a 3x3 sliding window across the entire matrix, summing the
-# total of the 3x3 window, capture the highest value we see across the matrix
-maxValue=-10
-topCorner=None
-subMatrixTotal=0
-for y in range(1, matrix.height-2):
-    for x in range(1, matrix.width-2):
-        subMatrix=matrix.subMatrix(x, y, x+2, y+2)
-        subMatrixTotal=subMatrix.total()
-        if subMatrixTotal>maxValue:
-            topCorner=(x, y)
-            maxValue=subMatrixTotal
+vdu=Matrix(initMatrixX,initMatrixY,defaultValue=0,csw=cellSizeW,csh=cellSizeH)
+vdu.setAllTo(0)
+sc.addMatrix("vdu", vdu, True)
 
-print("Max value:", maxValue, " at:",topCorner)
+print ("=== PROGRAM STARTING ===")
 
 # **** End of puzzle specific setup code
 
@@ -1365,17 +1744,14 @@ print("Max value:", maxValue, " at:",topCorner)
 
 # create a pygame window
 pygame.init()
-sc.sw=matrix.width * matrix.cellSizeW
-sc.sh=matrix.height * matrix.cellSizeH
+sc.sw=sc.currentMatrix.width * sc.currentMatrix.cellSizeW
+sc.sh=sc.currentMatrix.height * sc.currentMatrix.cellSizeH
 screen = pygame.display.set_mode((sc.sw, sc.sh))
-pygame.display.set_caption(sc.screenCaption+" M: "+str(matrix.width)+"x"+str(matrix.height))
+pygame.display.set_caption(sc.screenCaption+" M: "+str(sc.currentMatrix.width)+"x"+str(sc.currentMatrix.height))
 #font = pygame.font.Font(None, scaleFactor)
-font = pygame.font.SysFont('Segoe UI Emoji', min(matrix.cellSizeW,matrix.cellSizeH)) # emoji capable font
-display = Display(sc, screen, matrix)
+font = pygame.font.SysFont('Segoe UI Emoji', min(sc.currentMatrix.cellSizeW,sc.currentMatrix.cellSizeH)) # emoji capable font
+display = Display(sc, screen, sc.currentMatrix)
 # end standard pygame setup code
-
-
-
 
 
 # Main game loop - will repeatedly draw whilst the running flag
@@ -1385,30 +1761,93 @@ display = Display(sc, screen, matrix)
 # caught with the pygame QUIT event
 running = True
 runs=0
-maxRuns=1
-while running and runs<maxRuns:
+maxRuns=100000
+
+ballPos=[0,0]
+batPos=[0,0]
+
+while running: #and runs<maxRuns:
 #while running:
+    # print out the run and payload status
+    if runs==0:
+        print("Run:", runs)  
+
+
+    joystick=0
     for event in pygame.event.get():
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_n:
+                # add -1 to the input buffer
+                joystick=-1
+            elif event.key == pygame.K_m:
+                # add 1 to the input buffer
+                joystick=1
+
         display.processEvents(sc, event)
 
-    #if runs%100000==0:
-    display.updateDisplay(sc, runs=0)
-    #time.sleep(1/sc.frameRate) # now sleep for 0.25 seconds
+
+    if runs%100==0:
+        display.updateDisplay(sc, runs=0)
+        #time.sleep(1/sc.frameRate) # now sleep for 0.25 seconds
+        #cpu.printCPUState()
+        #time.sleep(0.01)
+
+    running=cpu.step()
+
+    # lets fetch a pair of numbers from the robot commands
+    if len(CPUToVDU.buffer)>=3:
+
+        x=CPUToVDU.read()
+        y=CPUToVDU.read()
+        t=CPUToVDU.read()
+
+        updateBat=False
+
+        if x==-1 and y==0:
+            print("score: ", t)
+ 
+
+        if t==4:
+            if ballPos!=[x, y]:
+                ballPos=[x, y]
+                updateBat=True
+            #print("ball at: ", ballPos)
+        elif t==3:
+            batPos=[x, y]
+            #print("bat at: ", batPos)
+
+        if updateBat:
+            #print("bat and ball found")
+            xdelta=batPos[0]-ballPos[0]
+            #print("bat off by:",xdelta)
+            if xdelta==0:
+                joystick=0
+            elif xdelta>0:
+                joystick=-1
+            else:
+                joystick=1
+
+            InputToCPU.write(joystick)
+            #print("InputBuffer:",InputToCPU.buffer)
 
 
-
-    # print out the run and payload status
-    #if runs%100000==0:
-    print("Run:", runs)  
-
+        vdu.setCellValue(x, y, t)
+    else:
+        #print("not enough input yet")
+        pass
 
     runs+=1
 
-# Puzzle specific results - print out key counters here
-print("Final Run:", runs)  
-print("Final Matrix safe count:",matrix.count('.'))
 
+# Puzzle specific results - print out key counters here
+print("=== PROGRAM COMPLETE === [after: ",runs," runs]")
+
+total=vdu.count(2)
+print("Total: ", total)
+
+#cpu.printProgram()
 #sc.inspectConfig()
+cpu.outputBuffer.print()
 
 running=True
 
@@ -1429,5 +1868,6 @@ pygame.quit()
 
 # box unicode chars; https://en.wikipedia.org/wiki/Box_Drawing
 
-
-#https://adventofcode.com/2018/day/11#part2
+# Fixed up so that the sprite will draw, and that the matrix cell will paint based on the numeric value (e.g. 0/black 1/white)
+# Need to implement sprite behaviour to move and paint
+# Need to link program execution to spire behaviour
